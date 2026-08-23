@@ -88,5 +88,11 @@ def test_dashboard_access_key_login(tmp_path: Path, monkeypatch) -> None:
             assert 'id="auth-screen"' in dashboard
             assert "sessionStorage.getItem('leadfinderAdminKey')" in dashboard
             assert "localStorage.setItem('leadfinderAdminKey'" not in dashboard
+            assert "Комментарий к решению" not in dashboard
+            assert "Телефон (только полученный" not in dashboard
+            assert "На чём основано согласие" not in dashboard
+            assert 'onclick="editPhone(' not in dashboard
+            assert 'onclick="consent(' not in dashboard
+            assert "JSON.stringify({status,note:''})" in dashboard
     finally:
         get_settings.cache_clear()
