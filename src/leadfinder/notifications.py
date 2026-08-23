@@ -530,6 +530,13 @@ def _notification_text(signal: Signal, source: ChatSource, dashboard_url: str) -
         author_html = html.escape(str(author))
     message_text = html.escape(signal.text[:1200])
     source_text = html.escape(source.title)
+    message_date = signal.message_date
+    if message_date is None:
+        message_date_text = "—"
+    else:
+        if message_date.tzinfo is None:
+            message_date = message_date.replace(tzinfo=UTC)
+        message_date_text = message_date.astimezone(UTC).strftime("%d.%m.%Y %H:%M UTC")
     status_text = "высокая уверенность" if signal.status == "new" else "нужна проверка"
     links: list[str] = []
     if signal.permalink:
@@ -547,6 +554,7 @@ def _notification_text(signal: Signal, source: ChatSource, dashboard_url: str) -
         f"Score: {signal.final_score:.2f}\n"
         f"Автор: {author_html}\n"
         f"Группа: {source_text}\n\n"
+        f"Дата сообщения: {message_date_text}\n\n"
         f"{message_text}\n\n"
         f"{links_line}\n"
         "⚠️ Публичное сообщение не является согласием на телефонный звонок."

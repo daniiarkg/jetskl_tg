@@ -1,9 +1,14 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from leadfinder.api import create_app
 from leadfinder.config import get_settings
+from leadfinder.db import Database
+from leadfinder.models import ChatSource, SearchProfileRecord, Signal
+from leadfinder.services import review_signal
 
 
 def test_dashboard_health_and_profile_api(tmp_path: Path, monkeypatch) -> None:
@@ -94,5 +99,52 @@ def test_dashboard_access_key_login(tmp_path: Path, monkeypatch) -> None:
             assert 'onclick="editPhone(' not in dashboard
             assert 'onclick="consent(' not in dashboard
             assert "JSON.stringify({status,note:''})" in dashboard
+    finally:
+        get_settings.cache_clear()
+
+
+def test_lead_api_includes_source_message_date(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'lead-date.db'}")
+    monkeypatch.delenv("ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_ACCESS_KEY", "")
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app()) as client:
+            database = Database(get_settings())
+            with database.session() as session:
+                profile = session.scalar(
+                    select(SearchProfileRecord).where(
+                        SearchProfileRecord.slug == "jetski-miami"
+                    )
+                )
+                assert profile is not None
+                source = ChatSource(
+                    telegram_chat_id=-100123,
+                    title="Miami test chat",
+                )
+                session.add(source)
+                session.flush()
+                signal = Signal(
+                    profile_id=profile.id,
+                    source_id=source.id,
+                    telegram_message_id=321,
+                    message_date=datetime(2026, 8, 23, 12, 34, tzinfo=UTC),
+                    text="Где взять гидроцикл в аренду в Майами?",
+                    author_user_id=777,
+                    final_score=0.91,
+                    status="new",
+                    extracted_data={"intent": "rent", "location": "Miami"},
+                )
+                session.add(signal)
+                session.flush()
+                lead = review_signal(session, signal, "qualified", "")
+                assert lead is not None
+
+            leads = client.get("/api/leads").json()
+            assert leads[0]["message_date"].startswith("2026-08-23T12:34:00")
+            dashboard = client.get("/").text
+            assert "Дата сообщения" in dashboard
+            assert "fmtDate(x.message_date)" in dashboard
     finally:
         get_settings.cache_clear()

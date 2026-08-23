@@ -29,6 +29,7 @@ from leadfinder.languages import (
 from leadfinder.models import (
     ChatSource,
     Lead,
+    LeadSignal,
     RunLog,
     SearchProfileRecord,
     Signal,
@@ -563,8 +564,20 @@ def create_app() -> FastAPI:
         limit: int = Query(default=200, ge=1, le=1000),
     ) -> list[dict[str, object]]:
         with _database().session() as session:
+            message_date = (
+                select(Signal.message_date)
+                .join(LeadSignal, LeadSignal.signal_id == Signal.id)
+                .where(LeadSignal.lead_id == Lead.id)
+                .order_by(
+                    LeadSignal.is_primary.desc(),
+                    Signal.message_date.desc(),
+                    LeadSignal.id.desc(),
+                )
+                .limit(1)
+                .scalar_subquery()
+            )
             query = (
-                select(Lead, ChatSource)
+                select(Lead, ChatSource, message_date)
                 .outerjoin(ChatSource, ChatSource.id == Lead.source_id)
                 .order_by(Lead.created_at.desc())
                 .limit(limit)
@@ -591,9 +604,10 @@ def create_app() -> FastAPI:
                     "status": lead.status,
                     "consent_to_call": lead.consent_to_call,
                     "consent_recorded_at": _iso(lead.consent_recorded_at),
+                    "message_date": _iso(signal_message_date),
                     "created_at": _iso(lead.created_at),
                 }
-                for lead, source in session.execute(query)
+                for lead, source, signal_message_date in session.execute(query)
             ]
 
     @app.patch("/api/leads/{lead_id}", dependencies=[Depends(_require_admin_key)])

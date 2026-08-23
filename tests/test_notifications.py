@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -74,6 +75,7 @@ def _database_with_signal(tmp_path: Path) -> tuple[Database, int]:
             profile_id=profile.id,
             source_id=source.id,
             telegram_message_id=99,
+            message_date=datetime(2026, 8, 23, 12, 34, tzinfo=UTC),
             permalink="https://t.me/russian_miami_test/99",
             text="Подскажите, где арендовать jetski в Майами?",
             author_user_id=777,
@@ -131,6 +133,7 @@ def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
     assert delivery.sent == 1
     notification = api.sent[-1]
     assert "Потенциальный jetski-лид" in str(notification["text"])
+    assert "Дата сообщения: 23.08.2026 12:34 UTC" in str(notification["text"])
     assert notification["reply_markup"] is not None
 
     api.updates.append(
