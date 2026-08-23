@@ -1,0 +1,12 @@
+.env
+.env.*
+.git
+.venv
+.sessions
+data
+exports
+__pycache__
+.pytest_cache
+.ruff_cache
+*.session
+*.session-journal

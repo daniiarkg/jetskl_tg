@@ -1,0 +1,92 @@
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from leadfinder.api import create_app
+from leadfinder.config import get_settings
+
+
+def test_dashboard_health_and_profile_api(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'api.db'}")
+    monkeypatch.delenv("ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_ACCESS_KEY", "")
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app()) as client:
+            assert client.get("/health").json() == {"status": "ok"}
+            assert "Demand Leadfinder" in client.get("/").text
+            profiles = client.get("/api/profiles").json()
+            assert profiles[0]["slug"] == "jetski-miami"
+            assert profiles[0]["languages"] == ["ru"]
+            assert "ISO codes" in profiles[0]["language_filter"]
+            assert client.get("/api/stats").json()["sources"] == 0
+            notification_status = client.get("/api/notifications/status").json()
+            assert not notification_status["bot_configured"]
+            assert notification_status["active_subscribers"] == 0
+
+            response = client.post(
+                "/api/profiles",
+                json={
+                    "slug": "boat-rental-miami",
+                    "name": "Boat rental Miami",
+                    "services": ["boat rental"],
+                    "locations": ["Miami"],
+                    "intents": ["rent", "book"],
+                    "languages": ["en"],
+                    "negative_terms": ["we offer"],
+                    "positive_examples": ["Where can I rent a boat in Miami?"],
+                    "classifier_prompt": "Find prospective boat-rental customers in Miami.",
+                    "query_limit": 10,
+                },
+            )
+            assert response.status_code == 200
+            assert response.json()["slug"] == "boat-rental-miami"
+            assert client.get("/api/stats").json()["profiles"] == 2
+
+            invalid = client.post(
+                "/api/profiles",
+                json={
+                    "slug": "invalid-language",
+                    "name": "Invalid language",
+                    "services": ["boat rental"],
+                    "locations": ["Miami"],
+                    "intents": ["rent"],
+                    "languages": ["klingon"],
+                    "classifier_prompt": "Find boat-rental demand.",
+                },
+            )
+            assert invalid.status_code == 422
+    finally:
+        get_settings.cache_clear()
+
+
+def test_dashboard_access_key_login(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'protected-api.db'}")
+    monkeypatch.setenv("ADMIN_API_KEY", "panel-secret")
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_ACCESS_KEY", "")
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app()) as client:
+            assert client.get("/api/auth/status").json() == {"required": True}
+            assert client.get("/api/stats").status_code == 401
+            assert client.post(
+                "/api/auth/login",
+                json={"access_key": "wrong"},
+            ).status_code == 401
+            assert client.post(
+                "/api/auth/login",
+                json={"access_key": "panel-secret"},
+            ).json() == {"ok": True}
+            assert client.get(
+                "/api/stats",
+                headers={"X-Admin-Key": "panel-secret"},
+            ).status_code == 200
+
+            dashboard = client.get("/").text
+            assert 'id="auth-screen"' in dashboard
+            assert "sessionStorage.getItem('leadfinderAdminKey')" in dashboard
+            assert "localStorage.setItem('leadfinderAdminKey'" not in dashboard
+    finally:
+        get_settings.cache_clear()

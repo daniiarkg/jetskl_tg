@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: leadfinder
+      POSTGRES_USER: leadfinder
+      POSTGRES_PASSWORD: leadfinder
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - leadfinder_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leadfinder -d leadfinder"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://leadfinder:leadfinder@postgres:5432/leadfinder
+      TELEGRAM_SESSION_PATH: /app/.sessions/leadfinder
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8000
+    command: ["uvicorn", "leadfinder.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./.sessions:/app/.sessions
+      - ./exports:/app/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://leadfinder:leadfinder@postgres:5432/leadfinder
+      TELEGRAM_SESSION_PATH: /app/.sessions/leadfinder
+    command: ["leadfinder", "worker", "--profile", "jetski-miami"]
+    volumes:
+      - ./.sessions:/app/.sessions
+    depends_on:
+      postgres:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  leadfinder_postgres:
