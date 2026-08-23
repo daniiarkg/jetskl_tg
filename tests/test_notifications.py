@@ -121,6 +121,7 @@ def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
     poll = poll_bot_updates(settings, database, api)
     assert poll.subscriptions_activated == 1
     assert (500, 11) in api.deleted
+    assert any(str(item["text"]).startswith("✅ Подключено") for item in api.sent)
     with database.session() as session:
         subscriber = session.scalar(select(NotificationSubscriber))
         assert subscriber is not None and subscriber.active
@@ -149,6 +150,20 @@ def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
         signal = session.get(Signal, signal_id)
         assert signal is not None and signal.status == "qualified"
         assert session.scalar(select(func.count()).select_from(Lead)) == 1
+
+    api.updates.append(
+        {
+            "update_id": 4,
+            "message": {
+                "message_id": 21,
+                "chat": {"id": 500},
+                "from": {"id": 500, "username": "operator"},
+                "text": "/status",
+            },
+        }
+    )
+    poll_bot_updates(settings, database, api)
+    assert str(api.sent[-1]["text"]).startswith("✅ Уже подключено")
 
 
 def test_enqueue_is_idempotent_for_active_subscriber(tmp_path: Path) -> None:

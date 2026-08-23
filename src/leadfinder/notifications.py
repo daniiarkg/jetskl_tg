@@ -259,6 +259,16 @@ def _is_locked(subscriber: NotificationSubscriber, now: datetime) -> bool:
     return locked_until > now
 
 
+def _connected_message(*, already_active: bool = False) -> str:
+    heading = "✅ Уже подключено" if already_active else "✅ Подключено"
+    return (
+        f"{heading}\n\n"
+        "Бот привязан к Leadfinder. Новые потенциальные лиды будут приходить "
+        "сюда с кнопками подтверждения и отклонения.\n\n"
+        "Статус можно проверить командой /status."
+    )
+
+
 def _process_access_key(
     settings: Settings,
     database: Database,
@@ -294,10 +304,7 @@ def _process_access_key(
                 subscriber.id,
                 {"queued_open_signals": queued},
             )
-            response_text = (
-                "✅ Уведомления подключены. Новые потенциальные сигналы будут приходить "
-                "сюда с кнопками подтверждения и отклонения."
-            )
+            response_text = _connected_message()
             activated = True
         else:
             subscriber.failed_access_attempts += 1
@@ -345,12 +352,24 @@ def _process_message_update(
         with database.session() as session:
             subscriber = _subscriber_for_chat(session, chat_id, user)
             if subscriber.active:
-                response = "Уведомления уже подключены. Для отключения отправьте /stop."
+                response = _connected_message(already_active=True)
             elif _is_locked(subscriber, datetime.now(UTC)):
                 response = "Слишком много попыток. Повторите позже."
             else:
                 subscriber.awaiting_access_key = True
                 response = "Отправьте ключ доступа отдельным сообщением."
+        api.send_message(chat_id, response)
+        return False
+
+    if command == "/status":
+        with database.session() as session:
+            subscriber = _subscriber_for_chat(session, chat_id, user)
+            active = subscriber.active
+        response = (
+            _connected_message(already_active=True)
+            if active
+            else "❌ Не подключено\n\nОтправьте /start и затем ключ доступа."
+        )
         api.send_message(chat_id, response)
         return False
 
@@ -365,7 +384,7 @@ def _process_message_update(
                 "notification_subscriber",
                 subscriber.id,
             )
-        api.send_message(chat_id, "Уведомления отключены. Для подключения отправьте /start.")
+        api.send_message(chat_id, "🔕 Отключено\n\nДля подключения отправьте /start.")
         return False
 
     with database.session() as session:
@@ -376,7 +395,10 @@ def _process_message_update(
             settings, database, api, chat_id, message_id, text, user
         )
 
-    api.send_message(chat_id, "Отправьте /start, чтобы подключить уведомления.")
+    api.send_message(
+        chat_id,
+        "Отправьте /start, чтобы подключить уведомления, или /status для проверки.",
+    )
     return False
 
 
