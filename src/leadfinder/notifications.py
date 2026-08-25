@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from leadfinder.config import Settings
 from leadfinder.db import Database
+from leadfinder.discovery import message_permalink
 from leadfinder.models import (
     AuditEvent,
     ChatSource,
@@ -539,9 +540,10 @@ def _notification_text(signal: Signal, source: ChatSource, dashboard_url: str) -
         message_date_text = message_date.astimezone(UTC).strftime("%d.%m.%Y %H:%M UTC")
     status_text = "высокая уверенность" if signal.status == "new" else "нужна проверка"
     links: list[str] = []
-    if signal.permalink:
+    permalink = signal.permalink or message_permalink(source, signal.telegram_message_id)
+    if permalink:
         links.append(
-            f'<a href="{html.escape(signal.permalink, quote=True)}">Открыть сообщение</a>'
+            f'<a href="{html.escape(permalink, quote=True)}">Открыть сообщение</a>'
         )
     if dashboard_url:
         links.append(

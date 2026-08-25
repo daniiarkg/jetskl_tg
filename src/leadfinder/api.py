@@ -19,7 +19,7 @@ from leadfinder.backfill import run_backfill
 from leadfinder.classification import build_classifier
 from leadfinder.config import Settings, get_settings
 from leadfinder.db import Database
-from leadfinder.discovery import run_discovery
+from leadfinder.discovery import message_permalink, run_discovery
 from leadfinder.exporter import export_leads, export_signals, export_sources
 from leadfinder.ingestion import SUPPORTED_PLATFORMS, NormalizedMessage, ingest_message
 from leadfinder.languages import (
@@ -508,7 +508,8 @@ def create_app() -> FastAPI:
                     "source_username": source.username,
                     "telegram_message_id": signal.telegram_message_id,
                     "message_date": _iso(signal.message_date),
-                    "permalink": signal.permalink,
+                    "permalink": signal.permalink
+                    or message_permalink(source, signal.telegram_message_id),
                     "text": signal.text,
                     "author_user_id": signal.author_user_id,
                     "author_username": signal.author_username,
@@ -582,7 +583,12 @@ def create_app() -> FastAPI:
                     "confidence": lead.confidence,
                     "status": lead.status,
                     "message_text": signal.text if signal else None,
-                    "message_permalink": signal.permalink if signal else None,
+                    "message_permalink": (
+                        signal.permalink
+                        or message_permalink(source, signal.telegram_message_id)
+                        if signal and source
+                        else None
+                    ),
                     "message_date": _iso(signal.message_date) if signal else None,
                     "created_at": _iso(lead.created_at),
                 }

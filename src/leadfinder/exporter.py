@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from leadfinder.db import Database
+from leadfinder.discovery import message_permalink
 from leadfinder.models import (
     ChatSource,
     Lead,
@@ -129,7 +130,12 @@ def export_leads(database: Database, path: Path) -> int:
                         else None
                     ),
                     "message_text": signal.text if signal else None,
-                    "message_permalink": signal.permalink if signal else None,
+                    "message_permalink": (
+                        signal.permalink
+                        or message_permalink(source, signal.telegram_message_id)
+                        if signal and source
+                        else None
+                    ),
                     "message_date": signal.message_date if signal else None,
                 }
             )

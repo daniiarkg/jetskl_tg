@@ -82,6 +82,9 @@ def upsert_source(
 def message_permalink(source: ChatSource, message_id: int) -> str | None:
     if source.username:
         return f"https://t.me/{source.username}/{message_id}"
+    telegram_chat_id = str(source.telegram_chat_id)
+    if telegram_chat_id.startswith("-100"):
+        return f"https://t.me/c/{telegram_chat_id[4:]}/{message_id}"
     return None
 
 
