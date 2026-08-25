@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from leadfinder.backfill import run_backfill
 from leadfinder.classification import build_classifier
@@ -45,12 +46,7 @@ from leadfinder.notifications import (
 from leadfinder.profiles import JETSKI_MIAMI, SearchProfileSpec
 from leadfinder.reclassification import reclassify_pending_signals
 from leadfinder.repository import upsert_profile
-from leadfinder.services import (
-    record_call_consent,
-    review_signal,
-    set_subscription_status,
-    update_lead_status,
-)
+from leadfinder.services import review_signal, set_subscription_status, update_lead_status
 from leadfinder.sources import add_public_source, sync_account_dialogs
 from leadfinder.workflows import start_passive_monitor, stop_passive_monitor
 
@@ -80,20 +76,6 @@ class SignalReview(BaseModel):
 
 class LeadUpdate(BaseModel):
     status: Literal["new", "reviewed", "contactable", "contacted", "won", "lost"] | None = None
-    phone: str | None = Field(default=None, max_length=50)
-    display_name: str | None = Field(default=None, max_length=500)
-
-
-class ConsentInput(BaseModel):
-    granted: bool
-    evidence: str = Field(default="", max_length=2000)
-    recorded_by: str = Field(default="operator", max_length=100)
-
-    @model_validator(mode="after")
-    def require_evidence_when_granted(self) -> ConsentInput:
-        if self.granted and not self.evidence.strip():
-            raise ValueError("Evidence is required when call consent is granted")
-        return self
 
 
 class ProfileInput(BaseModel):
@@ -259,7 +241,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Telegram Leadfinder",
         version="1.3.0",
-        description="Multi-source demand discovery and consent-aware lead review",
+        description="Multi-source demand discovery with source-linked lead review",
         lifespan=lifespan,
     )
 
@@ -320,10 +302,6 @@ def create_app() -> FastAPI:
                 )
                 or 0,
                 "leads": session.scalar(select(func.count()).select_from(Lead)) or 0,
-                "callable_leads": session.scalar(
-                    select(func.count()).select_from(Lead).where(Lead.consent_to_call.is_(True))
-                )
-                or 0,
             }
 
     @app.get("/api/profiles", dependencies=[Depends(_require_admin_key)])
@@ -564,9 +542,9 @@ def create_app() -> FastAPI:
         limit: int = Query(default=200, ge=1, le=1000),
     ) -> list[dict[str, object]]:
         with _database().session() as session:
-            message_date = (
-                select(Signal.message_date)
-                .join(LeadSignal, LeadSignal.signal_id == Signal.id)
+            primary_signal_id = (
+                select(LeadSignal.signal_id)
+                .join(Signal, Signal.id == LeadSignal.signal_id)
                 .where(LeadSignal.lead_id == Lead.id)
                 .order_by(
                     LeadSignal.is_primary.desc(),
@@ -574,11 +552,14 @@ def create_app() -> FastAPI:
                     LeadSignal.id.desc(),
                 )
                 .limit(1)
+                .correlate(Lead)
                 .scalar_subquery()
             )
+            primary_signal = aliased(Signal)
             query = (
-                select(Lead, ChatSource, message_date)
+                select(Lead, ChatSource, primary_signal)
                 .outerjoin(ChatSource, ChatSource.id == Lead.source_id)
+                .outerjoin(primary_signal, primary_signal.id == primary_signal_id)
                 .order_by(Lead.created_at.desc())
                 .limit(limit)
             )
@@ -594,20 +575,18 @@ def create_app() -> FastAPI:
                     "username": lead.username,
                     "display_name": lead.display_name,
                     "language": lead.language,
-                    "phone": lead.phone,
-                    "phone_origin": lead.phone_origin,
                     "intent": lead.intent,
                     "location": lead.location,
                     "event_date": _iso(lead.event_date),
                     "party_size": lead.party_size,
                     "confidence": lead.confidence,
                     "status": lead.status,
-                    "consent_to_call": lead.consent_to_call,
-                    "consent_recorded_at": _iso(lead.consent_recorded_at),
-                    "message_date": _iso(signal_message_date),
+                    "message_text": signal.text if signal else None,
+                    "message_permalink": signal.permalink if signal else None,
+                    "message_date": _iso(signal.message_date) if signal else None,
                     "created_at": _iso(lead.created_at),
                 }
-                for lead, source, signal_message_date in session.execute(query)
+                for lead, source, signal in session.execute(query)
             ]
 
     @app.patch("/api/leads/{lead_id}", dependencies=[Depends(_require_admin_key)])
@@ -618,32 +597,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="Lead not found")
             if payload.status:
                 update_lead_status(session, lead, payload.status)
-            if payload.phone is not None:
-                lead.phone = payload.phone.strip() or None
-                lead.phone_origin = "manual" if lead.phone else None
-            if payload.display_name is not None:
-                lead.display_name = payload.display_name.strip() or None
             return {"lead_id": lead.id, "status": lead.status}
-
-    @app.post("/api/leads/{lead_id}/call-consent", dependencies=[Depends(_require_admin_key)])
-    def set_call_consent(lead_id: int, payload: ConsentInput) -> dict[str, object]:
-        with _database().session() as session:
-            lead = session.get(Lead, lead_id)
-            if lead is None:
-                raise HTTPException(status_code=404, detail="Lead not found")
-            event = record_call_consent(
-                session,
-                lead,
-                payload.granted,
-                payload.evidence.strip(),
-                payload.recorded_by,
-            )
-            session.flush()
-            return {
-                "lead_id": lead.id,
-                "consent_to_call": lead.consent_to_call,
-                "event_id": event.id,
-            }
 
     @app.get("/api/runs", dependencies=[Depends(_require_admin_key)])
     def runs(limit: int = Query(default=50, ge=1, le=500)) -> list[dict[str, object]]:

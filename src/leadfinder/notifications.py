@@ -556,8 +556,7 @@ def _notification_text(signal: Signal, source: ChatSource, dashboard_url: str) -
         f"Группа: {source_text}\n\n"
         f"Дата сообщения: {message_date_text}\n\n"
         f"{message_text}\n\n"
-        f"{links_line}\n"
-        "⚠️ Публичное сообщение не является согласием на телефонный звонок."
+        f"{links_line}"
     ).strip()
 
 

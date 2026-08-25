@@ -579,7 +579,7 @@ def export_sources(
 def export_leads(
     path: Annotated[Path, typer.Argument()] = DEFAULT_LEADS_EXPORT,
 ) -> None:
-    """Export leads to CSV; phone is blank unless call consent is recorded."""
+    """Export leads to CSV with source-message text, timestamp, and permalink."""
     database = _database()
     database.create_all()
     count = write_leads_csv(database, path)

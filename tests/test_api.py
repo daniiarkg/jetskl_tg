@@ -96,6 +96,11 @@ def test_dashboard_access_key_login(tmp_path: Path, monkeypatch) -> None:
             assert "Комментарий к решению" not in dashboard
             assert "Телефон (только полученный" not in dashboard
             assert "На чём основано согласие" not in dashboard
+            assert "Одобряй только чаты" not in dashboard
+            assert "LLM и embeddings помогают" not in dashboard
+            assert "Контактные данные пока" not in dashboard
+            assert "Телефон" not in dashboard
+            assert "можно звонить" not in dashboard
             assert 'onclick="editPhone(' not in dashboard
             assert 'onclick="consent(' not in dashboard
             assert "JSON.stringify({status,note:''})" in dashboard
@@ -130,6 +135,7 @@ def test_lead_api_includes_source_message_date(tmp_path: Path, monkeypatch) -> N
                     source_id=source.id,
                     telegram_message_id=321,
                     message_date=datetime(2026, 8, 23, 12, 34, tzinfo=UTC),
+                    permalink="https://t.me/miami_test_chat/321",
                     text="Где взять гидроцикл в аренду в Майами?",
                     author_user_id=777,
                     final_score=0.91,
@@ -143,8 +149,14 @@ def test_lead_api_includes_source_message_date(tmp_path: Path, monkeypatch) -> N
 
             leads = client.get("/api/leads").json()
             assert leads[0]["message_date"].startswith("2026-08-23T12:34:00")
+            assert leads[0]["message_text"] == "Где взять гидроцикл в аренду в Майами?"
+            assert leads[0]["message_permalink"] == "https://t.me/miami_test_chat/321"
+            assert "phone" not in leads[0]
+            assert "consent_to_call" not in leads[0]
             dashboard = client.get("/").text
-            assert "Дата сообщения" in dashboard
+            assert "Дата и время" in dashboard
             assert "fmtDate(x.message_date)" in dashboard
+            assert "x.message_permalink" in dashboard
+            assert "x.message_text" in dashboard
     finally:
         get_settings.cache_clear()

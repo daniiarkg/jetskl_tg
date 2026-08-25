@@ -1,4 +1,5 @@
 import csv
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -12,13 +13,12 @@ from leadfinder.repository import upsert_profile
 from leadfinder.services import (
     acquire_job_lease,
     create_or_update_lead_from_signal,
-    record_call_consent,
     release_job_lease,
     review_signal,
 )
 
 
-def test_signal_creates_lead_and_consent_controls_csv(tmp_path: Path) -> None:
+def test_signal_creates_lead_and_csv_keeps_source_message_without_phone(tmp_path: Path) -> None:
     database = Database(Settings(database_url=f"sqlite:///{tmp_path / 'test.db'}"))
     database.create_all()
     with database.session() as session:
@@ -34,6 +34,8 @@ def test_signal_creates_lead_and_consent_controls_csv(tmp_path: Path) -> None:
             profile_id=profile.id,
             source_id=source.id,
             telegram_message_id=77,
+            message_date=datetime(2026, 8, 25, 10, 15, tzinfo=UTC),
+            permalink="https://t.me/miami_visitors/77",
             text="Need two jet skis in Miami tomorrow",
             author_user_id=456,
             author_username="guest456",
@@ -47,26 +49,18 @@ def test_signal_creates_lead_and_consent_controls_csv(tmp_path: Path) -> None:
         lead = create_or_update_lead_from_signal(session, signal)
         assert lead is not None
         assert lead.language == "en"
-        lead_id = lead.id
+        assert lead.phone is None
 
-    output = tmp_path / "leads-without-consent.csv"
+    output = tmp_path / "leads.csv"
     assert export_leads(database, output) == 1
     with output.open(encoding="utf-8-sig") as fp:
         row = next(csv.DictReader(fp))
-    assert row["phone"] == ""
+    assert "phone" not in row
+    assert "phone_origin" not in row
+    assert "consent_to_call" not in row
     assert row["language"] == "en"
-    assert row["message_permalink"] == ""
-
-    with database.session() as session:
-        lead = session.get(Lead, lead_id)
-        assert lead is not None
-        record_call_consent(session, lead, True, "Asked us to call in Telegram")
-
-    output = tmp_path / "leads-with-consent.csv"
-    export_leads(database, output)
-    with output.open(encoding="utf-8-sig") as fp:
-        row = next(csv.DictReader(fp))
-    assert row["phone"] == "+13055550123"
+    assert row["message_text"] == "Need two jet skis in Miami tomorrow"
+    assert row["message_permalink"] == "https://t.me/miami_visitors/77"
     assert row["source_title"] == "Miami visitors"
 
     with database.session() as session:

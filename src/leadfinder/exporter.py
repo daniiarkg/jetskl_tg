@@ -85,15 +85,12 @@ def export_leads(database: Database, path: Path) -> int:
         "username",
         "display_name",
         "language",
-        "phone",
-        "phone_origin",
         "intent",
         "location",
         "event_date",
         "party_size",
         "confidence",
         "status",
-        "consent_to_call",
         "message_text",
         "message_permalink",
         "message_date",
@@ -136,8 +133,6 @@ def export_leads(database: Database, path: Path) -> int:
                     "message_date": signal.message_date if signal else None,
                 }
             )
-            if not lead.consent_to_call:
-                row["phone"] = ""
             writer.writerow(row)
             count += 1
     return count

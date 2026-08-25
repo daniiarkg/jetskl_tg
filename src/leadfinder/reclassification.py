@@ -120,11 +120,7 @@ def reclassify_pending_signals(
                             )
                             .limit(1)
                         )
-                        if (
-                            other_active_signal is None
-                            and lead.status == "new"
-                            and not lead.consent_to_call
-                        ):
+                        if other_active_signal is None and lead.status == "new":
                             add_audit_event(
                                 session,
                                 "lead.false_positive_removed",

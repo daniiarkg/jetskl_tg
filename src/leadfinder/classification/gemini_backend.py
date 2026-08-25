@@ -115,7 +115,7 @@ Required decision rules:
 - Reject provider advertisements, promotional posts, offers, sales, repairs, jobs, news,
   unrelated rentals and vague social chatter.
 - A provider ad is never a potential customer, even if it contains every search keyword.
-- Do not infer identity, phone number, party size, date or location unless explicitly present.
+- Do not infer identity, party size, date or location unless explicitly present.
 - Return language as a lowercase ISO 639-1 code. Detect code-switching by returning the
   dominant language.
 - English service and place names inside a Russian message do not make it non-Russian.

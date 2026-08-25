@@ -134,6 +134,9 @@ def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
     notification = api.sent[-1]
     assert "Потенциальный jetski-лид" in str(notification["text"])
     assert "Дата сообщения: 23.08.2026 12:34 UTC" in str(notification["text"])
+    assert "Подскажите, где арендовать jetski в Майами?" in str(notification["text"])
+    assert 'href="https://t.me/russian_miami_test/99"' in str(notification["text"])
+    assert "звон" not in str(notification["text"]).casefold()
     assert notification["reply_markup"] is not None
 
     api.updates.append(

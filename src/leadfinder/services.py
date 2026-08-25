@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from leadfinder.models import (
     AuditEvent,
-    ConsentEvent,
     JobLease,
     Lead,
     LeadSignal,
@@ -116,9 +115,6 @@ def create_or_update_lead_from_signal(session: Session, signal: Signal) -> Lead 
     lead.platform = signal.source.platform
     lead.external_user_id = signal.author_external_id or lead.external_user_id
     lead.display_name = signal.author_display_name or lead.display_name
-    if signal.author_phone_visible:
-        lead.phone = signal.author_phone_visible
-        lead.phone_origin = "telegram_visible"
     lead.confidence = max(lead.confidence, signal.final_score)
     extracted = signal.extracted_data or {}
     if extracted.get("intent"):
@@ -189,11 +185,7 @@ def _remove_unconfirmed_leads_for_signal(session: Session, signal: Signal) -> in
             )
             .limit(1)
         )
-        if (
-            other_active_signal is None
-            and lead.status == "new"
-            and not lead.consent_to_call
-        ):
+        if other_active_signal is None and lead.status == "new":
             add_audit_event(
                 session,
                 "lead.false_positive_removed",
@@ -219,37 +211,6 @@ def update_lead_status(session: Session, lead: Lead, status: str) -> Lead:
         {"from": previous, "to": status},
     )
     return lead
-
-
-def record_call_consent(
-    session: Session,
-    lead: Lead,
-    granted: bool,
-    evidence: str,
-    recorded_by: str = "operator",
-) -> ConsentEvent:
-    lead.consent_to_call = granted
-    lead.consent_recorded_at = utc_now()
-    if granted and lead.status == "new":
-        lead.status = "contactable"
-    elif not granted and lead.status == "contactable":
-        lead.status = "reviewed"
-    event = ConsentEvent(
-        lead_id=lead.id,
-        channel="phone",
-        granted=granted,
-        evidence=evidence,
-        recorded_by=recorded_by,
-    )
-    session.add(event)
-    add_audit_event(
-        session,
-        "lead.call_consent_recorded",
-        "lead",
-        lead.id,
-        {"granted": granted, "recorded_by": recorded_by},
-    )
-    return event
 
 
 def start_run(session: Session, run_type: str, profile_slug: str | None) -> RunLog:

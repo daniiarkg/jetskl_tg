@@ -214,7 +214,6 @@ async def run_monitor(
                             author_user_id=sender.id,
                             author_username=sender.username,
                             author_display_name=display_name(sender),
-                            author_phone_visible=sender.phone,
                             author_is_bot=bool(sender.bot),
                             keyword_score=result.keyword_score,
                             embedding_score=result.embedding_score,
