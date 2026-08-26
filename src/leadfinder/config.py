@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     telegram_notification_access_key: SecretStr | None = None
     notification_delivery_batch: int = Field(default=50, ge=1, le=500)
     notification_max_attempts: int = Field(default=8, ge=1, le=50)
+    lead_hot_max_age_days: int = Field(default=7, ge=1, le=3650)
+    lead_active_max_age_days: int = Field(default=30, ge=1, le=3650)
+    lead_review_max_age_days: int = Field(default=90, ge=1, le=3650)
+    backfill_notifications_enabled: bool = False
     dashboard_public_url: str = "http://127.0.0.1:8000"
 
     @field_validator(
@@ -59,6 +63,20 @@ class Settings(BaseSettings):
     @classmethod
     def empty_secret_is_none(cls, value: object) -> object:
         return None if value == "" else value
+
+    @model_validator(mode="after")
+    def freshness_windows_are_ordered(self) -> Settings:
+        if not (
+            self.lead_hot_max_age_days
+            <= self.lead_active_max_age_days
+            <= self.lead_review_max_age_days
+        ):
+            raise ValueError(
+                "Freshness windows must satisfy "
+                "LEAD_HOT_MAX_AGE_DAYS <= LEAD_ACTIVE_MAX_AGE_DAYS "
+                "<= LEAD_REVIEW_MAX_AGE_DAYS"
+            )
+        return self
 
     def require_telegram_credentials(self) -> tuple[int, str]:
         if not self.telegram_api_id or not self.telegram_api_hash:

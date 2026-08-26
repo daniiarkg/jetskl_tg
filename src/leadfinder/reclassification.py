@@ -7,6 +7,7 @@ from sqlalchemy import select
 from leadfinder.classification import HybridClassifier, MessageContext
 from leadfinder.config import Settings
 from leadfinder.db import Database
+from leadfinder.freshness import FreshnessBand, assess_freshness
 from leadfinder.models import (
     ChatSource,
     Lead,
@@ -91,10 +92,19 @@ def reclassify_pending_signals(
                 extracted = dict(signal.extracted_data or {})
                 extracted.update(result.extracted_data)
                 signal.extracted_data = extracted
+                freshness = assess_freshness(
+                    settings,
+                    signal.message_date,
+                    extracted,
+                )
                 if result.is_candidate:
-                    signal.status = "new"
+                    signal.status = (
+                        "new"
+                        if freshness.band in {FreshnessBand.HOT, FreshnessBand.ACTIVE}
+                        else "possible"
+                    )
                     counters["candidates_confirmed"] += 1
-                    if settings.auto_create_leads:
+                    if settings.auto_create_leads and freshness.automatic_lead_eligible:
                         lead = create_or_update_lead_from_signal(session, signal)
                         counters["leads_created_or_updated"] += int(lead is not None)
                 else:

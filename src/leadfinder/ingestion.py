@@ -10,6 +10,7 @@ from leadfinder.classification import HybridClassifier, MessageContext
 from leadfinder.config import Settings
 from leadfinder.db import Database
 from leadfinder.extraction import extract_message_facts
+from leadfinder.freshness import FreshnessBand, assess_freshness
 from leadfinder.models import ChatSource, SearchProfileRecord, Signal, utc_now
 from leadfinder.notifications import enqueue_signal_notifications
 from leadfinder.repository import spec_from_record
@@ -135,7 +136,19 @@ def ingest_message(
             )
         )
         if existing is not None:
-            lead = create_or_update_lead_from_signal(session, existing)
+            lead = existing.lead_links[0].lead if existing.lead_links else None
+            freshness = assess_freshness(
+                settings,
+                existing.message_date,
+                existing.extracted_data,
+            )
+            if (
+                lead is None
+                and settings.auto_create_leads
+                and existing.status == "new"
+                and freshness.automatic_lead_eligible
+            ):
+                lead = create_or_update_lead_from_signal(session, existing)
             return IngestionResult(
                 source_id=source_id,
                 source_status=source_status,
@@ -161,7 +174,9 @@ def ingest_message(
                 final_score=result.final_score,
             )
 
-        published_at = message.published_at or utc_now()
+        # An unknown publication date must stay unknown. Treating it as "now" would
+        # allow an arbitrarily old connector item to bypass the freshness gate.
+        published_at = message.published_at
         facts = extract_message_facts(profile, message.text, published_at)
         facts.update(result.extracted_data)
         facts.update(
@@ -171,6 +186,7 @@ def ingest_message(
                 "message_external_id": message.message_external_id,
             }
         )
+        freshness = assess_freshness(settings, published_at, facts)
         author_numeric_id = (
             _stable_numeric_id(
                 f"author:{platform}", message.author_external_id
@@ -197,16 +213,28 @@ def ingest_message(
             final_score=result.final_score,
             classification_reasons=list(result.reasons),
             extracted_data=facts,
-            status="new" if result.is_candidate else "possible",
+            status=(
+                "new"
+                if result.is_candidate
+                and freshness.band in {FreshnessBand.HOT, FreshnessBand.ACTIVE}
+                else "possible"
+            ),
         )
         session.add(signal)
         session.flush()
         lead = (
             create_or_update_lead_from_signal(session, signal)
-            if result.is_candidate and settings.auto_create_leads
+            if result.is_candidate
+            and settings.auto_create_leads
+            and freshness.automatic_lead_eligible
             else None
         )
-        enqueue_signal_notifications(session, signal, lead)
+        enqueue_signal_notifications(
+            session,
+            signal,
+            lead,
+            settings=settings,
+        )
         return IngestionResult(
             source_id=source_id,
             source_status=source_status,

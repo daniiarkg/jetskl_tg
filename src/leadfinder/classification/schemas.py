@@ -20,6 +20,13 @@ class LeadDecisionPayload(BaseModel):
     intent: str | None = None
     location: str | None = None
     event_date_text: str | None = None
+    event_date: str | None = Field(
+        default=None,
+        description=(
+            "Explicit absolute requested event date in ISO YYYY-MM-DD format; "
+            "null for relative or uncertain dates"
+        ),
+    )
     party_size: int | None = Field(default=None, ge=1, le=1000)
     language: str | None = Field(
         default=None,

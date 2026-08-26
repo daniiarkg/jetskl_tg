@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -57,10 +57,16 @@ class FakeBotAPI:
         self.cleared.append((chat_id, message_id))
 
 
-def _database_with_signal(tmp_path: Path) -> tuple[Database, int]:
+def _database_with_signal(
+    tmp_path: Path,
+    *,
+    message_date: datetime | None = None,
+    extracted_data: dict[str, object] | None = None,
+) -> tuple[Database, int, datetime]:
     settings = Settings(database_url=f"sqlite:///{tmp_path / 'notifications.db'}")
     database = Database(settings)
     database.create_all()
+    published_at = message_date or datetime.now(UTC).replace(microsecond=0) - timedelta(days=1)
     with database.session() as session:
         profile = upsert_profile(session, JETSKI_MIAMI, query_limit=3)
         source = ChatSource(
@@ -75,23 +81,23 @@ def _database_with_signal(tmp_path: Path) -> tuple[Database, int]:
             profile_id=profile.id,
             source_id=source.id,
             telegram_message_id=99,
-            message_date=datetime(2026, 8, 23, 12, 34, tzinfo=UTC),
+            message_date=published_at,
             permalink="https://t.me/russian_miami_test/99",
             text="Подскажите, где арендовать jetski в Майами?",
             author_user_id=777,
             author_username="buyer777",
             final_score=0.82,
             status="possible",
-            extracted_data={"language": "ru", "location": "Miami"},
+            extracted_data=extracted_data or {"language": "ru", "location": "Miami"},
         )
         session.add(signal)
         session.flush()
         signal_id = signal.id
-    return database, signal_id
+    return database, signal_id, published_at
 
 
 def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
-    database, signal_id = _database_with_signal(tmp_path)
+    database, signal_id, published_at = _database_with_signal(tmp_path)
     settings = Settings(
         database_url=f"sqlite:///{tmp_path / 'notifications.db'}",
         telegram_notification_bot_token="test-token",
@@ -133,7 +139,8 @@ def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
     assert delivery.sent == 1
     notification = api.sent[-1]
     assert "Потенциальный jetski-лид" in str(notification["text"])
-    assert "Дата сообщения: 23.08.2026 12:34 UTC" in str(notification["text"])
+    expected_date = published_at.astimezone(UTC).strftime("%d.%m.%Y %H:%M UTC")
+    assert f"Дата сообщения: {expected_date}" in str(notification["text"])
     assert "Подскажите, где арендовать jetski в Майами?" in str(notification["text"])
     assert 'href="https://t.me/russian_miami_test/99"' in str(notification["text"])
     assert "звон" not in str(notification["text"]).casefold()
@@ -173,15 +180,80 @@ def test_start_access_key_delivery_and_inline_approval(tmp_path: Path) -> None:
 
 
 def test_enqueue_is_idempotent_for_active_subscriber(tmp_path: Path) -> None:
-    database, signal_id = _database_with_signal(tmp_path)
+    database, signal_id, _ = _database_with_signal(tmp_path)
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'notifications.db'}")
     with database.session() as session:
         subscriber = NotificationSubscriber(telegram_chat_id=501, active=True)
         session.add(subscriber)
         signal = session.get(Signal, signal_id)
         assert signal is not None
-        assert enqueue_signal_notifications(session, signal) == 1
+        assert enqueue_signal_notifications(session, signal, settings=settings) == 1
         session.flush()
-        assert enqueue_signal_notifications(session, signal) == 0
+        assert enqueue_signal_notifications(session, signal, settings=settings) == 0
 
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(NotificationOutbox)) == 1
+
+
+def test_stale_signal_is_not_enqueued_and_pending_delivery_is_suppressed(
+    tmp_path: Path,
+) -> None:
+    old_date = datetime.now(UTC) - timedelta(days=91)
+    database, signal_id, _ = _database_with_signal(tmp_path, message_date=old_date)
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'notifications.db'}")
+    with database.session() as session:
+        subscriber = NotificationSubscriber(telegram_chat_id=502, active=True)
+        session.add(subscriber)
+        session.flush()
+        signal = session.get(Signal, signal_id)
+        assert signal is not None
+        assert enqueue_signal_notifications(session, signal, settings=settings) == 0
+
+        # Simulate an item queued before deployment of the freshness gate.
+        session.add(
+            NotificationOutbox(
+                subscriber_id=subscriber.id,
+                signal_id=signal.id,
+                idempotency_key=f"legacy-stale:{signal.id}:{subscriber.id}",
+                status="pending",
+            )
+        )
+
+    api = FakeBotAPI()
+    result = deliver_pending_notifications(settings, database, api)
+    assert result.attempted == 1
+    assert result.sent == 0
+    assert result.failed == 1
+    assert api.sent == []
+    with database.session() as session:
+        item = session.scalar(select(NotificationOutbox))
+        assert item is not None
+        assert item.status == "failed"
+        assert item.last_error == "freshness gate: older-than-review-window"
+
+
+def test_pairing_does_not_replay_old_open_signals(tmp_path: Path) -> None:
+    old_date = datetime.now(UTC) - timedelta(days=45)
+    database, _, _ = _database_with_signal(tmp_path, message_date=old_date)
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'notifications.db'}",
+        telegram_notification_access_key="secret-access",
+    )
+    api = FakeBotAPI(
+        [
+            {
+                "update_id": 1,
+                "message": {
+                    "message_id": 10,
+                    "chat": {"id": 503},
+                    "from": {"id": 503},
+                    "text": "/start secret-access",
+                },
+            }
+        ]
+    )
+
+    poll = poll_bot_updates(settings, database, api)
+    assert poll.subscriptions_activated == 1
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(NotificationOutbox)) == 0

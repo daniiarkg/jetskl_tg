@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from leadfinder.config import Settings
 from leadfinder.db import Database
 from leadfinder.discovery import message_permalink
+from leadfinder.freshness import assess_freshness
 from leadfinder.models import (
     AuditEvent,
     ChatSource,
@@ -213,8 +214,19 @@ def enqueue_signal_notifications(
     session: Session,
     signal: Signal,
     lead: Lead | None = None,
+    *,
+    settings: Settings,
+    now: datetime | None = None,
 ) -> int:
-    """Insert outbox rows in the same transaction as the signal."""
+    """Insert outbox rows only for signals that pass the hard age gate."""
+    freshness = assess_freshness(
+        settings,
+        signal.message_date,
+        signal.extracted_data,
+        now=now,
+    )
+    if not freshness.notification_eligible:
+        return 0
     subscribers = list(
         session.scalars(
             select(NotificationSubscriber).where(
@@ -231,24 +243,41 @@ def enqueue_signal_notifications(
 def _enqueue_open_signals_for_subscriber(
     session: Session,
     subscriber: NotificationSubscriber,
+    settings: Settings,
 ) -> int:
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=settings.lead_review_max_age_days)
     signals = list(
         session.scalars(
             select(Signal)
-            .where(Signal.status.in_(("new", "possible")))
+            .where(
+                Signal.status.in_(("new", "possible")),
+                Signal.message_date.is_not(None),
+                Signal.message_date >= cutoff,
+            )
             .order_by(Signal.id.desc())
             .limit(100)
         )
     )
-    return sum(
-        _enqueue_for_subscriber(
-            session,
-            subscriber,
-            signal,
-            _lead_id_for_signal(session, signal.id),
+    queued = 0
+    for signal in signals:
+        freshness = assess_freshness(
+            settings,
+            signal.message_date,
+            signal.extracted_data,
+            now=now,
         )
-        for signal in signals
-    )
+        if not freshness.notification_eligible:
+            continue
+        queued += int(
+            _enqueue_for_subscriber(
+                session,
+                subscriber,
+                signal,
+                _lead_id_for_signal(session, signal.id),
+            )
+        )
+    return queued
 
 
 def _is_locked(subscriber: NotificationSubscriber, now: datetime) -> bool:
@@ -297,7 +326,11 @@ def _process_access_key(
             subscriber.awaiting_access_key = False
             subscriber.failed_access_attempts = 0
             subscriber.locked_until = None
-            queued = _enqueue_open_signals_for_subscriber(session, subscriber)
+            queued = _enqueue_open_signals_for_subscriber(
+                session,
+                subscriber,
+                settings,
+            )
             _audit(
                 session,
                 "notification.subscriber_activated",
@@ -602,6 +635,17 @@ def deliver_pending_notifications(
             if source is None:
                 item.status = "failed"
                 item.last_error = "source unavailable"
+                failed += 1
+                continue
+            freshness = assess_freshness(
+                settings,
+                signal.message_date,
+                signal.extracted_data,
+                now=now,
+            )
+            if not freshness.notification_eligible:
+                item.status = "failed"
+                item.last_error = f"freshness gate: {freshness.reason}"
                 failed += 1
                 continue
             chat_id = subscriber.telegram_chat_id

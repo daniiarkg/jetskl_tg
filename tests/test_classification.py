@@ -40,6 +40,19 @@ def test_negative_llm_boolean_cannot_become_high_score() -> None:
     assert lead_probability(payload) == 0.05
 
 
+def test_structured_payload_preserves_explicit_iso_event_date() -> None:
+    payload = LeadDecisionPayload(
+        is_potential_customer=True,
+        confidence=0.9,
+        is_provider_ad=False,
+        reason="Buyer asks for a future date",
+        event_date_text="10 September 2026",
+        event_date="2026-09-10",
+    )
+
+    assert payload.event_date == "2026-09-10"
+
+
 def test_keyword_classifier_accepts_buyer_intent() -> None:
     result = HybridClassifier(candidate_threshold=0.5).classify(
         JETSKI_MIAMI,
@@ -53,6 +66,23 @@ def test_keyword_classifier_accepts_buyer_intent() -> None:
     assert result.keyword_score >= 0.9
 
 
+def test_keyword_classifier_accepts_researched_mid_beach_buyer_message() -> None:
+    result = HybridClassifier(candidate_threshold=0.5).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text="где выгодно взять jetski mid-beach miami",
+            query="Русскоязычный чат Майами",
+            source_language="ru",
+        ),
+    )
+
+    assert result.is_candidate
+    assert result.keyword_score == 1.0
+    assert "service:jetski" in result.reasons
+    assert "location:Miami" in result.reasons
+    assert "intent:где выгодно взять" in result.reasons
+
+
 def test_keyword_classifier_rejects_provider_ad() -> None:
     result = HybridClassifier(candidate_threshold=0.5).classify(
         JETSKI_MIAMI,
@@ -64,6 +94,69 @@ def test_keyword_classifier_rejects_provider_ad() -> None:
 
     assert not result.is_candidate
     assert result.keyword_score < 0.5
+
+
+def test_keyword_classifier_accepts_colloquial_typo_in_miami_area() -> None:
+    result = HybridClassifier(candidate_threshold=0.5).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text="Ребята, кто сдаёт два jetsky в Санни-Айлс на завтра?",
+            query="Русскоязычный чат Майами",
+            source_language="ru",
+        ),
+    )
+
+    assert result.is_candidate
+    assert result.keyword_score == 1.0
+    assert "service:jetsky" in result.reasons
+    assert "location:Санни-Айлс" in result.reasons
+
+
+def test_keyword_classifier_accepts_aquabike_island_request() -> None:
+    result = HybridClassifier(candidate_threshold=0.5).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text="У кого есть контакт, чтобы взять аквабайк до острова енотов?",
+            query="Русскоязычный чат Майами",
+            source_language="ru",
+        ),
+    )
+
+    assert result.is_candidate
+    assert "service:аквабайк" in result.reasons
+    assert "location:острова енотов" in result.reasons
+
+
+def test_keyword_classifier_rejects_russian_provider_promo() -> None:
+    result = HybridClassifier(candidate_threshold=0.5).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text=(
+                "Мы сдаём гидроциклы в Sunny Isles. Наш парк, "
+                "лучшие цены и промокод MIAMI10. Пишите в директ."
+            ),
+            query="jet ski Miami",
+            source_language="ru",
+        ),
+    )
+
+    assert not result.is_candidate
+    assert result.keyword_score < 0.5
+    assert any(reason.startswith("negative:") for reason in result.reasons)
+
+
+def test_keyword_classifier_rejects_past_experience_without_new_demand() -> None:
+    result = HybridClassifier(candidate_threshold=0.5).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text="Вчера покатались на гидроциклах в Key Biscayne, было классно.",
+            query="jet ski Miami",
+            source_language="ru",
+        ),
+    )
+
+    assert not result.is_candidate
+    assert "negative:покатались" in result.reasons
 
 
 def test_embedding_contributes_to_hybrid_score() -> None:
@@ -161,6 +254,41 @@ def test_required_llm_skips_generic_miami_message_without_jetski_signal() -> Non
     assert result.embedding_score is None
     assert result.llm_score is None
     assert "prefilter:no-service-signal" in result.reasons
+
+
+def test_required_llm_skips_generic_water_leisure_near_target_island() -> None:
+    result = HybridClassifier(
+        embedding_backend=FakeEmbeddingBackend(0.99),
+        llm_backend=FakeLLMBackend(0.99, language="ru"),
+        candidate_threshold=0.55,
+        require_llm_confirmation=True,
+    ).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text="Подскажите, какие водные развлечения есть на Raccoon Island?",
+            query="Русскоязычный чат Майами",
+            source_language="ru",
+        ),
+    )
+
+    assert not result.is_candidate
+    assert result.embedding_score is None
+    assert result.llm_score is None
+    assert "prefilter:no-service-signal" in result.reasons
+
+
+def test_pwc_company_name_is_not_a_watercraft_service_signal() -> None:
+    result = HybridClassifier(candidate_threshold=0.5).classify(
+        JETSKI_MIAMI,
+        MessageContext(
+            text="Ищу работу в офисе PwC Miami.",
+            query="Русскоязычный чат Майами",
+            source_language="ru",
+        ),
+    )
+
+    assert not result.is_candidate
+    assert "missing-service" in result.reasons
 
 
 def test_required_llm_rejects_message_outside_profile_languages() -> None:

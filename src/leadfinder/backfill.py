@@ -13,6 +13,7 @@ from leadfinder.config import Settings
 from leadfinder.db import Database
 from leadfinder.discovery import message_permalink
 from leadfinder.extraction import extract_message_facts
+from leadfinder.freshness import FreshnessBand, assess_freshness
 from leadfinder.models import ChatSource, SearchProfileRecord, Signal, SourceSubscription, utc_now
 from leadfinder.monitor import display_name, resolve_source_entity
 from leadfinder.notifications import enqueue_signal_notifications
@@ -155,6 +156,11 @@ async def run_backfill(
                             continue
                         facts = extract_message_facts(profile, text, message.date)
                         facts.update(result.extracted_data)
+                        freshness = assess_freshness(
+                            settings,
+                            message.date,
+                            facts,
+                        )
                         with database.session() as session:
                             existing = session.scalar(
                                 select(Signal).where(
@@ -185,17 +191,33 @@ async def run_backfill(
                                 final_score=result.final_score,
                                 classification_reasons=list(result.reasons),
                                 extracted_data=facts,
-                                status="new" if result.is_candidate else "possible",
+                                status=(
+                                    "new"
+                                    if result.is_candidate
+                                    and freshness.band
+                                    in {FreshnessBand.HOT, FreshnessBand.ACTIVE}
+                                    else "possible"
+                                ),
                             )
                             session.add(signal)
                             session.flush()
                             counters["signals_created"] += 1
                             lead = None
-                            if result.is_candidate and settings.auto_create_leads:
+                            if (
+                                result.is_candidate
+                                and settings.auto_create_leads
+                                and freshness.automatic_lead_eligible
+                            ):
                                 lead = create_or_update_lead_from_signal(session, signal)
                                 if lead is not None:
                                     counters["leads_created_or_updated"] += 1
-                            enqueue_signal_notifications(session, signal, lead)
+                            if settings.backfill_notifications_enabled:
+                                enqueue_signal_notifications(
+                                    session,
+                                    signal,
+                                    lead,
+                                    settings=settings,
+                                )
                 with database.session() as session:
                     subscription = session.get(SourceSubscription, subscription_id)
                     if subscription is not None:

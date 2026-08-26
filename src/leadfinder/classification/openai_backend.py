@@ -31,7 +31,8 @@ class OpenAILLMBackend:
             "Return true only when the message author appears to be a prospective customer. "
             "Reject provider advertisements, job posts, sales, repairs, news and unclear chatter. "
             "Do not infer or invent personal information. Extract only facts explicitly present "
-            "in the message. "
+            "in the message. Return event_date as YYYY-MM-DD only for an explicit absolute "
+            "calendar date; leave it null for relative or uncertain dates. "
             f"Search definition: {profile.classifier_prompt}"
         )
         response = self._client.responses.parse(
@@ -53,6 +54,7 @@ class OpenAILLMBackend:
                 "intent": payload.intent,
                 "location": payload.location,
                 "event_date_text": payload.event_date_text,
+                "event_date": payload.event_date,
                 "party_size": payload.party_size,
                 "language": payload.language,
             }.items()

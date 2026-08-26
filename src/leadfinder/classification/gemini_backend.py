@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 
 import httpx
 
@@ -114,14 +115,23 @@ Required decision rules:
 - The requested geography must be explicit or strongly implied by the message/chat context.
 - Reject provider advertisements, promotional posts, offers, sales, repairs, jobs, news,
   unrelated rentals and vague social chatter.
+- Reject a past experience, review or recommendation that contains no new current or future
+  request from the author.
+- A generic request for leisure, water activities, an island trip or things to do is not
+  enough unless the configured jet-ski service is explicit.
 - A provider ad is never a potential customer, even if it contains every search keyword.
 - Do not infer identity, party size, date or location unless explicitly present.
+- For an explicit absolute calendar date, return event_date as YYYY-MM-DD. Leave event_date
+  null for relative expressions such as today or tomorrow and for any uncertain date.
 - Return language as a lowercase ISO 639-1 code. Detect code-switching by returning the
   dominant language.
 - English service and place names inside a Russian message do not make it non-Russian.
 - When the known source language is Russian, an English-only message can still belong to the
   Russian-speaking target audience, but customer intent and service demand remain mandatory.
 - Keep reason short and factual.
+
+Current UTC date (only for interpreting an explicitly written calendar date):
+{datetime.now(UTC).date().isoformat()}
 
 Telegram message:
 {context.text}
@@ -152,6 +162,7 @@ Telegram message:
                 "intent": payload.intent,
                 "location": payload.location,
                 "event_date_text": payload.event_date_text,
+                "event_date": payload.event_date,
                 "party_size": payload.party_size,
                 "language": payload.language,
             }.items()

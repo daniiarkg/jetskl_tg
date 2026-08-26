@@ -69,6 +69,7 @@ def upsert_source(
     source.platform = "telegram"
     source.external_source_id = str(telegram_chat_id)
     source.username = getattr(entity, "username", None)
+    source.source_url = f"https://t.me/{source.username}" if source.username else None
     source.kind = _chat_kind(entity)
     source.is_public = bool(source.username)
     source.participant_count = getattr(entity, "participants_count", None)
